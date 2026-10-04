@@ -11,8 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 load_dotenv()
-from typing import List,Dict
-from fastapi import FastAPI, UploadFile , File , HTTPException
+from typing import List, Dict
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
@@ -20,7 +20,7 @@ from rank_bm25 import BM25Okapi
 from openai import OpenAI
 
 
-##CONFIG
+# Configuration
 
 API_KEY = os.getenv("GROQ_API_KEY")
 if not API_KEY:
@@ -51,17 +51,16 @@ app.add_middleware(
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
-##GORK FALLBACK CONFIG
+# GROQ fallback configuration
 
 GROQ_MODELS = [
     "openai/gpt-oss-120b",
     "llama-3.3-70b-versatile",
     "openai/gpt-oss-20b",
-    "llama-3.1-8b-instant"
+    "llama-3.1-8b-instant",
 ]
 
-MAX_RETRIES_PER_MODEL =  2
-MODEL_TIMEOUT_SECONDS = 20
+MAX_RETRIES_PER_MODEL = 2
 
 # GLOBAL STORES
 faiss_index = None
@@ -74,21 +73,20 @@ metadata_store = []
 # ==============================
 
 def extract_pdf_with_metadata(file_path: str):
-    doc = fitz.open(file_path)
     documents = []
 
-    for page_num, page in enumerate(doc):
-        text = page.get_text()
-        sections = detect_sections(text)
+    with fitz.open(file_path) as doc:
+        for page_num, page in enumerate(doc):
+            text = page.get_text()
+            sections = detect_sections(text)
 
-        for section_title, section_text in sections:
-            documents.append({
-                "text": section_text,
-                "page": page_num + 1,
-                "section": section_title
-            })
+            for section_title, section_text in sections:
+                documents.append({
+                    "text": section_text,
+                    "page": page_num + 1,
+                    "section": section_title
+                })
 
-    doc.close()
     return documents
 
 
@@ -109,17 +107,20 @@ def detect_sections(text: str):
 
 
 
-## ==============================
+# ==============================
 # SEMANTIC CHUNKING
 # ==============================
 
-def semantic_chunking(text: str, max_tokens=300):
+def semantic_chunking(text: str, max_chars=300):
+    """Group sentences by character length; a single long sentence stays intact."""
     sentences = re.split(r'(?<=[.!?]) +', text)
     chunks = []
     current_chunk = ""
 
     for sentence in sentences:
-        if len(current_chunk) + len(sentence) < max_tokens:
+        if not sentence.strip():
+            continue
+        if len(current_chunk) + len(sentence) < max_chars:
             current_chunk += " " + sentence
         else:
             if current_chunk:
@@ -164,7 +165,7 @@ def build_indexes(documents: List[Dict]):
 
 
 
-    # ==============================
+# ==============================
 # HYBRID RETRIEVAL
 # ==============================
 
@@ -174,8 +175,8 @@ def hybrid_search(query: str, k=5):
         raise HTTPException(status_code=400, detail="No document uploaded yet.")
 
     query_vec = embedding_model.encode([query])
-    D, I = faiss_index.search(np.array(query_vec), k)
-    semantic_results = list(I[0])
+    _, indices = faiss_index.search(np.array(query_vec), min(k, len(chunk_store)))
+    semantic_results = [int(idx) for idx in indices[0] if idx >= 0]
 
     tokenized_query = query.split()
     bm25_scores = bm25.get_scores(tokenized_query)
@@ -194,7 +195,7 @@ def hybrid_search(query: str, k=5):
 
 
 
-    # ==============================
+# ==============================
 # PROMPT BUILDER (GUARDRAILS)
 # ==============================
 def build_prompt(context_chunks, question, mode, level):
@@ -280,10 +281,10 @@ Return JSON with:
 
 
 # ==============================
-#  GORK MULTI-MODEL FALLBACK
+# GROQ MULTI-MODEL FALLBACK
 # ==============================
 
-def ask_gork_with_fallback(prompt: str):
+def ask_groq_with_fallback(prompt: str):
 
     last_error = None
 
@@ -320,7 +321,7 @@ def ask_gork_with_fallback(prompt: str):
 
 
 
-    # ==============================
+# ==============================
 # REQUEST MODEL
 # ==============================
 
@@ -331,7 +332,7 @@ class Query(BaseModel):
 
 
 
-    # ==============================
+# ==============================
 # API ROUTES
 # ==============================
 
@@ -341,11 +342,15 @@ async def upload_pdf(file: UploadFile = File(...)):
     file_id = str(uuid.uuid4())
     file_path = f"temp_{file_id}.pdf"
 
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+    try:
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
 
-    documents = extract_pdf_with_metadata(file_path)
-    build_indexes(documents)
+        documents = extract_pdf_with_metadata(file_path)
+        build_indexes(documents)
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
     return {"message": "PDF processed with hybrid index"}
 
@@ -356,8 +361,8 @@ async def ask_question(query: Query):
     results = hybrid_search(query.question)
     prompt = build_prompt(results, query.question, query.mode, query.level)
 
-    # Ask Gork
-    answer = ask_gork_with_fallback(prompt)
+    # Ask GROQ
+    answer = ask_groq_with_fallback(prompt)
 
     # Clean the answer string
     cleaned = answer.strip()

@@ -31,7 +31,12 @@ function setLoading(loading) {
 
 // Read a backend response and show useful errors for failed requests.
 async function readResponse(response) {
-    const data = await response.json();
+    let data;
+    try {
+        data = await response.json();
+    } catch {
+        throw new Error("The server returned an unreadable response. Check that the backend is running.");
+    }
     if (!response.ok) {
         const detail = typeof data.detail === "string" ? data.detail : "Request failed. Please try again.";
         throw new Error(detail);
