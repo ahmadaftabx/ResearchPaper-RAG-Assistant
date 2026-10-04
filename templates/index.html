@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PaperMind AI — Your research companion</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-image">
+    <main class="layout">
+        <article class="chat-card">
+            <header class="header">
+                <p>Your research companion</p>
+                <h1>PaperMind AI</h1>
+                <p>Turn a research paper into answers you can understand.</p>
+            </header>
+
+            <div class="controls">
+                <section aria-labelledby="upload-heading">
+                    <h2 id="upload-heading">01 · Add your paper</h2>
+                    <p id="upload-help">Choose a PDF, then upload it to begin exploring.</p>
+                    <div class="upload-row">
+                        <label for="pdfUpload">Research paper PDF</label>
+                        <input type="file" id="pdfUpload" accept=".pdf,application/pdf" aria-describedby="upload-help">
+                        <button type="button" id="uploadButton" class="upload-btn">Upload paper</button>
+                    </div>
+                </section>
+
+                <section aria-labelledby="question-heading">
+                    <h2 id="question-heading">02 · Follow your curiosity</h2>
+                    <label for="level">How detailed should the explanation be?</label>
+                    <select id="level">
+                        <option value="10 year old">Beginner — simple and clear</option>
+                        <option value="college student" selected>College student — a closer look</option>
+                        <option value="researcher">Researcher — technical detail</option>
+                    </select>
+                    <div class="input-row">
+                        <label for="question">Your question</label>
+                        <textarea id="question" rows="3" placeholder="What is the main idea of this paper?"></textarea>
+                        <button type="button" id="askButton" class="send-btn">Ask PaperMind</button>
+                    </div>
+                </section>
+            </div>
+
+            <section aria-labelledby="answer-heading">
+                <h2 id="answer-heading">03 · Make sense of the research</h2>
+                <p>Answers from your paper will appear below.</p>
+                <div class="chat-window" id="chatBox" role="log" aria-live="polite" aria-relevant="additions" aria-label="Questions and answers"></div>
+            </section>
+        </article>
+    </main>
+    <script src="/static/script.js"></script>
+</body>
+</html>
