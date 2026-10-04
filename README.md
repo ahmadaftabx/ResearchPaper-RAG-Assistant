@@ -22,14 +22,14 @@ PDF → Text Extraction → Chunking → SentenceTransformer Embeddings
 
 1. **Extract:** PyMuPDF reads each page. A regular expression identifies uppercase section headings; page and section metadata accompany the text.
 2. **Chunk:** Sentences are grouped around a 300-character target. This is sentence-based grouping, not semantic boundary detection or token counting; long individual sentences remain intact.
-3. **Index:** `all-MiniLM-L6-v2` produces embeddings stored in a FAISS `IndexFlatL2`. BM25 indexes whitespace-separated terms from the same chunks.
+3. **Index:** `all-MiniLM-L6-v2` produces normalized float32 embeddings stored in a FAISS `IndexFlatIP`. Inner-product search on normalized document and query vectors is equivalent to cosine similarity. BM25 indexes whitespace-separated terms from the same chunks.
 4. **Retrieve:** The question is embedded for vector search and split into terms for keyword search.
 5. **Generate:** Retrieved text and metadata are included in a prompt requesting document-grounded explanations, page citations, and structured JSON. The OpenAI Python client connects to Groq's compatible endpoint.
 6. **Display:** The frontend renders structured sections, or falls back to displaying the raw response if JSON parsing fails.
 
 ### How hybrid retrieval works
 
-FAISS retrieves chunks with similar embedding vectors, while BM25 retrieves chunks matching the question's terms. The application takes the union of the top results from both methods and removes duplicate chunk indices. This combines semantic similarity and lexical matching; it does not perform weighted score fusion, reranking, or relevance thresholding. By default, each method retrieves up to five chunks.
+FAISS ranks chunks by cosine-equivalent inner-product similarity, while BM25 ranks chunks by keyword relevance. Reciprocal Rank Fusion (RRF) combines the two ranked lists: each chunk receives `1 / (60 + rank)` from every list in which it appears, with ranks starting at 1. Chunks are returned by descending total score, with chunk index breaking ties deterministically. By default, each method retrieves up to five candidates, and the best five combined chunks are returned. RRF combines ranks rather than comparing raw vector and BM25 scores; it does not provide learned reranking or relevance thresholding.
 
 ## Tech stack
 
@@ -86,7 +86,7 @@ Uploading another PDF replaces the in-memory document index. The UI uses the bac
 ## Project structure
 
 ```text
-AI-Research-Paper-Explainer/
+ResearchPaper-RAG-Assistant/
 ├── main.py                 # Extraction, indexing, retrieval, LLM calls, API
 ├── requirements.txt        # Python dependencies
 ├── README.md
@@ -114,7 +114,7 @@ The local `.env`, editor settings, Python caches, and temporary PDFs are exclude
 
 - **Single shared index:** Data is stored in process-wide memory, with no user isolation, persistence, or concurrency guarantees. Restarting clears the index.
 - **Extraction quality:** Scanned PDFs have no OCR support; complex layouts and equations may extract poorly. Section detection is heuristic.
-- **Retrieval quality:** BM25 uses simple whitespace splitting. The union is not ranked by a combined score, and no retrieval evaluation metrics are implemented. Future work could add normalization, reranking, and a benchmark dataset.
+- **Retrieval quality:** BM25 uses simple whitespace splitting. RRF combines ranks but has not been evaluated against a benchmark; no retrieval evaluation metrics are implemented. Future work could add lexical preprocessing, learned reranking, and a benchmark dataset.
 - **Chunking:** Character-based sentence grouping can exceed the target for long sentences. Token-aware limits and overlap could improve context handling.
 - **Generation:** Document grounding and JSON structure are prompt instructions, not guarantees. Answers and citations require verification. Model fallback does not guarantee provider availability.
 - **Deployment:** Blocking model calls, permissive CORS, and the absence of authentication, upload-size limits, and rate limiting make this a local portfolio prototype. Production hardening is future work.

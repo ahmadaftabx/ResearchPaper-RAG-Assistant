@@ -55,9 +55,7 @@ embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 GROQ_MODELS = [
     "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-20b",
-    "llama-3.1-8b-instant",
 ]
 
 MAX_RETRIES_PER_MODEL = 2
@@ -95,6 +93,8 @@ def detect_sections(text: str):
     splits = re.split(section_patterns, text)
 
     sections = []
+    if len(splits) > 1 and splits[0].strip():
+        sections.append(("GENERAL", splits[0].strip()))
     for i in range(1, len(splits), 2):
         title = splits[i].strip()
         content = splits[i + 1].strip()
@@ -154,11 +154,13 @@ def build_indexes(documents: List[Dict]):
 
     if not chunk_store:
         raise ValueError("No text extracted from PDF.")
-    embeddings = embedding_model.encode(chunk_store)
+    embeddings = np.asarray(
+        embedding_model.encode(chunk_store, normalize_embeddings=True), dtype=np.float32
+    )
     dim = embeddings.shape[1]
 
-    faiss_index = faiss.IndexFlatL2(dim)
-    faiss_index.add(np.array(embeddings))
+    faiss_index = faiss.IndexFlatIP(dim)
+    faiss_index.add(embeddings)
 
     tokenized = [chunk.split() for chunk in chunk_store]
     bm25 = BM25Okapi(tokenized)
@@ -174,15 +176,26 @@ def hybrid_search(query: str, k=5):
     if faiss_index is None or bm25 is None:
         raise HTTPException(status_code=400, detail="No document uploaded yet.")
 
-    query_vec = embedding_model.encode([query])
-    _, indices = faiss_index.search(np.array(query_vec), min(k, len(chunk_store)))
+    if k <= 0:
+        return []
+    query_vec = np.asarray(
+        embedding_model.encode([query], normalize_embeddings=True), dtype=np.float32
+    )
+    _, indices = faiss_index.search(query_vec, min(k, len(chunk_store)))
     semantic_results = [int(idx) for idx in indices[0] if idx >= 0]
 
     tokenized_query = query.split()
     bm25_scores = bm25.get_scores(tokenized_query)
-    keyword_results = np.argsort(bm25_scores)[::-1][:k]
+    keyword_results = np.argsort(-np.asarray(bm25_scores), kind="stable")[:k]
 
-    combined = list(set(semantic_results) | set(keyword_results))
+    # Reciprocal Rank Fusion: add rank-based scores from both retrievers.
+    rrf_scores = {}
+    for ranked_results in (semantic_results, keyword_results):
+        for rank, idx in enumerate(ranked_results, start=1):
+            idx = int(idx)
+            rrf_scores[idx] = rrf_scores.get(idx, 0.0) + 1.0 / (60 + rank)
+    # Chunk index breaks equal-score ties consistently.
+    combined = sorted(rrf_scores, key=lambda idx: (-rrf_scores[idx], idx))[:k]
 
     results = []
     for idx in combined:
@@ -208,7 +221,8 @@ def build_prompt(context_chunks, question, mode, level):
     base_instruction = """
 You are a strict research assistant.
 Use ONLY the provided context.
-If answer not found, respond exactly: "Not available in document."
+For any JSON field unsupported by the context, use "Not available in document." as its value.
+Keep the key_concepts array structure; use this value in its concept and explanation fields when unsupported.
 Cite page numbers.
 Return structured JSON only.
 Ensure every field in the JSON is filled if information exists in context.
@@ -343,10 +357,18 @@ async def upload_pdf(file: UploadFile = File(...)):
     file_path = f"temp_{file_id}.pdf"
 
     try:
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Please upload a PDF file.")
+        contents = await file.read()
+        if not contents.lstrip().startswith(b"%PDF-"):
+            raise HTTPException(status_code=400, detail="The uploaded file is not a PDF.")
         with open(file_path, "wb") as f:
-            f.write(await file.read())
+            f.write(contents)
 
-        documents = extract_pdf_with_metadata(file_path)
+        try:
+            documents = extract_pdf_with_metadata(file_path)
+        except (fitz.FileDataError, fitz.EmptyFileError) as exc:
+            raise HTTPException(status_code=400, detail="The PDF is empty or invalid.") from exc
         build_indexes(documents)
     finally:
         if os.path.exists(file_path):
